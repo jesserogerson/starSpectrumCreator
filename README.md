@@ -8,11 +8,11 @@ Additional credits:
 1. Advice provided by Geoff Matthews, mathewsgeoff@fhda.edu, for line lists of
 multiple elements.
 
-####DESCRIPTION:
+#### DESCRIPTION:
 This script randomly generates stellar spectra and randomly puts absorption
 features of various elements on that spectra.
 
-####LEARNING GOALS:
+#### LEARNING GOALS:
 This script was developed for use in NATS1740, an introductory astronomy course
 for non-science majors at York University, Toronto. The students who take NATS
 courses at YorkU come from a wide variety of academic backgrounds, mostly with
@@ -30,7 +30,7 @@ project associated with it:
 - understand how relative motion affects the absorption/emission patterns via
   the doppler effect
 
-####FOR HELP:
+#### FOR HELP:
 
 $> ./ starSpectrumCreator.py -h
 
@@ -49,8 +49,7 @@ optional arguments:
                     specify the root/suffix of those two PDFs.
                     The default is: randomStarSpectra.pdf
 
-OUTPUTS:
-----------
+#### OUTPUTS:
 The output of this script is two PDFs: one to give to the student, and one to
 give to the Professor/TA/Teaching Team (the latter contains answers).
 
@@ -86,7 +85,7 @@ c) Figure 2's title contains the elements used to create the absorption pattern
 
 This additional information is used for grading purposes.
 
-####NOTES:
+#### NOTES:
 a) The absorption pattern is randomly selected from an internal set of common
 elements. Therefore, the elements that create the absorption patterns seen in
 the outputted spectra do not match the known elements found in each spectral
@@ -104,7 +103,7 @@ been adjusted to see them better. Since this script is meant for teaching
 purposes (and should never be used for any research applications), it focusses
 on concepts, not accuracy.
 
-c)FUTURE Ideas:
+c)Future Ideas:
 - make it possible for the user to choose the elements via optional arguments.
 - use the correct elements for the absorption patterns depending on spectral type
 - have absorption patterns extend across the UV, visible, and infrared
