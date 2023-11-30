@@ -92,7 +92,7 @@ the outputted spectra do not match the known elements found in each spectral
 type. Consult the following to see what are the common elements found in each
 spectral type spectra:
 
-- Table 17.3, [Astronomy 2e, Opentext](https://openstax.org/books/astronomy-2e/pages/17-3-the-spectra-of-stars-and-brown-dwarfs)
+- Table 17.3, [Astronomy 2e, Openstax](https://openstax.org/books/astronomy-2e/pages/17-3-the-spectra-of-stars-and-brown-dwarfs)
 - University of Nebraska-Lincoln. (2023). [Spectroscopic Parallax Simulator](https://astro.unl.edu/classaction/animations/stellarprops/spectroparallax.html)
 
 b) The line list and intensities of those lines are not entirely real, they are
