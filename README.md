@@ -34,13 +34,13 @@ project associated with it:
 
 $> ./ starSpectrumCreator.py -h
 
-usage: starSpectrumCreator.py [-h] [-out OUT] studentList.csv
+usage: starSpectrumCreator.py [-h] [-out OUT] [-seed SEED] [-no_rainbow_student] studentList.csv
 
 positional arguments:
 studentList.csv     /path/to/list/of/students. Must be a CSV file,
                     with column 1: student number, column 2: last name,
                     column 3: first name. More columns are fine,
-                    they wont be used.
+                    they wont be used. A header row is fine; it is skipped.
 
 optional arguments:
   -h, --help        show this help message and exit
@@ -48,6 +48,23 @@ optional arguments:
                     'ANSWERS_' and 'STUDENT_'. This argument allows you to
                     specify the root/suffix of those two PDFs.
                     The default is: randomStarSpectra.pdf
+  -seed SEED        Any word or number. The same seed always gives each student
+                    the same star, so re-running is safe. Use a new seed each
+                    year (e.g. -seed FW26) for new stars.
+  -no_rainbow_student  Leave the colour strip off the STUDENT pages.
+
+#### WHAT'S NEW (2026):
+- Spectral types are equally likely (O through M); temperatures stay away from
+  class boundaries.
+- Each student's star is fixed by their student number and -seed.
+- Figures are labelled with the last 5 digits of the student number only.
+- Spectra are in relative intensity (peak = 1); Figure 1 has minor gridlines;
+  Figure 2 has smooth line shapes and a colour strip showing what it looks like
+  by eye.
+- Calcium and magnesium replace mercury and neon.
+- The answer key has a second page per student (Q8 Doppler shifts, Q9 emission
+  spectrum) and a spreadsheet, ANSWERS_[root].csv, with the answers to Q1-Q5
+  and Q7 for every student.
 
 #### OUTPUTS:
 The output of this script is two PDFs: one to give to the student, and one to
@@ -107,3 +124,17 @@ c)Future Ideas:
 - make it possible for the user to choose the elements via optional arguments.
 - use the correct elements for the absorption patterns depending on spectral type
 - have absorption patterns extend across the UV, visible, and infrared
+
+#### LINE LISTS (lines/ folder):
+Plain-text line lists for each element, used to choose the absorption lines in
+starSpectrumCreator.py. Columns: wavelength (nm, vacuum below 200 nm, air
+above), spectrum (ion), and NIST reference code. Source: NIST Handbook of Basic
+Atomic Spectroscopic Data (https://physics.nist.gov/PhysRefData/Handbook/).
+The calcium, magnesium, nitrogen, carbon, oxygen, and iron files list NIST's
+persistent lines plus every line the script uses. (mercury_lines.txt is in
+Angstroms; mercury and neon are no longer used by the script.)
+
+#### HANDOUTS:
+makeAbsorptionHandouts.py makes the "Absorption patterns" handouts students use
+to identify elements. It imports the line lists from starSpectrumCreator.py, so
+the handouts always match the spectra. Run: python3 makeAbsorptionHandouts.py

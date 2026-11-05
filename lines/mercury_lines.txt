@@ -1,0 +1,15 @@
+ 1000    P      1649.9373         Hg II      SR01
+ 1000    P      1849.499          Hg I       WA63
+ 1000    P      1942.273          Hg II      SR01
+  400    P      2052.828          Hg II      SR01
+ 1000    P,c    2536.517          Hg I       BAL50
+  400    P      2847.675          Hg II      SR01
+  600    P      3650.153          Hg I       BAL50
+ 1000    P,c    3983.931          Hg II      SR01
+  400    P      4046.563          Hg I       BAL50
+ 1000    P      4358.328          Hg I       BAL50
+   50           5769.598          Hg I       BAL50
+   60           5790.663          Hg I       BAL50
+  250    P,c    6149.475          Hg II      SR01 
+  250    P      7944.555          Hg II      SR01
+  200    P     10139.76           Hg I       BAL50

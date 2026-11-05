@@ -1,0 +1,3 @@
+student_number,label,last_name,first_name,Q1_peak_region,Q2_peak_wavelength_nm,Q3_wien_temperature_K,Q4_times_vs_sun,Q4_hotter_or_cooler,Q5_spectral_type,Q7_element_1,Q7_element_2,Q7_element_3,true_temperature_K
+123456789,...56789,Rogerson,Jesse,Visible,420.0,6898,1.19,hotter,F,Iron,Magnesium,Calcium,6900
+987654321,...54321,Rogerson,Alex,Infrared,906.0,3198,1.81,cooler,M,Carbon,Oxygen,Helium,3200

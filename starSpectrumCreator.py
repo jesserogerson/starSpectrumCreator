@@ -127,15 +127,42 @@ HISTORY
 2023-11-29 - JAR - added a large amount of comments
                  - added in optional argument -out OUT, which allows user to
                    to specify the name of the output PDFs
+2026-11-05 - JAR - temperatures now drawn by spectral class (O-M equally
+                   likely, kept away from class edges) instead of a flat
+                   2,400-30,000 K range; ANSWERS Figure 1 title shows the class
+                 - added minor gridlines (every 20 nm) to Figure 1
+                 - absorption lines now smooth Gaussian dips (line_sigma) on a
+                   0.1 nm grid from 380-720 nm, instead of 1 nm boxes
+                 - replaced Mercury and Neon with Calcium and Magnesium (seen
+                   in real stellar spectra); moved one Fe line (516.7 -> 532.8)
+                   off the Mg b triplet; planck() vectorized; figures closed
+                   after saving
+                 - Oxygen 616.5 -> 615.8 nm to match NIST
+                 - line lists for all elements now documented in lines/*.txt
+                   (NIST Handbook of Basic Atomic Spectroscopic Data)
+                 - each student's star now fixed by student number + -seed, so
+                   re-running never changes anyone's spectrum
+                 - figures labelled by last 5 digits of the student number
+                 - spectra shown as relative intensity (peak = 1); Figure 2
+                   y-axis starts at 0; layout overlap fixed; colour strip
+                   under Figure 2 (-no_rainbow_student to hide it)
+                 - ANSWERS: UV/Vis/IR boundaries and peak on Figure 1, every
+                   line labelled on Figure 2, and a 2nd page per student with
+                   Q8 (blue/redshifted Figure 2) and Q9 (emission spectrum)
+                 - ANSWERS_[root].csv answer key spreadsheet (Q1-Q5, Q7)
+                 - -out now works; header/blank rows in the class list skipped
 --------------------------------------------------------------------------------
 '''
 import numpy as np
 from matplotlib.backends.backend_pdf import PdfPages
 import matplotlib.pyplot as plt
+from matplotlib.ticker import MultipleLocator
 from scipy.constants import h, c, k
 import argparse
 import random
+import hashlib
 import csv
+import os
 import sys
 
 # Constants
@@ -156,11 +183,16 @@ Li_depth=[0.1,0.1,0.1,0.5,0.9]
 Na_lines=[439.3, 445.5, 449.1, 589, 589.6]
 Na_depth=[0.1,0.1,0.1,0.9,0.9]
 
-Hg_lines=[404.7, 435.8, 546.1, 577, 579.1]
-Hg_depth=[0.75,0.9,0.9,0.5,0.5]
+# Calcium: Ca II 'K' and 'H' lines (393.4, 396.8; very strong in the Sun and
+# cooler stars), the strong Ca I line at 422.7, and two weaker Ca I lines.
+# NOTE: K and H sit just below 400 nm; Figure 2 starts at 390 nm so they show.
+Ca_lines=[393.4, 396.8, 422.7, 558.9, 649.4]
+Ca_depth=[0.9, 0.9, 0.6, 0.25, 0.3]
 
-Ne_lines=[540.1, 585.2, 588.2, 603, 607.4, 616.4, 621.7, 626.6, 633.4, 638.3, 640.2, 650.6, 659.9, 692.9]
-Ne_depth=[0.05, 0.5, 0.25, 0.25, 0.5, 0.75, 0.25, 0.25, 0.25, 0.25, 0.25, 1, 0.5, 0.5]
+# Magnesium: the Mg I 'b' triplet (516.7, 517.3, 518.4) is its signature
+# feature in stellar spectra, plus two weaker Mg I lines.
+Mg_lines=[457.1, 516.7, 517.3, 518.4, 571.1]
+Mg_depth=[0.2, 0.6, 0.8, 0.9, 0.4]
 
 N_lines=[480.3, 496.3, 575.2, 593.1]
 N_depth=[0.25,0.5,0.15,0.7]
@@ -168,181 +200,441 @@ N_depth=[0.25,0.5,0.15,0.7]
 C_lines=[426.7,514.5,515.1,658.2]
 C_depth=[0.5,0.5,0.6,0.7]
 
-O_lines=[407.2,418.5,441.4,464.9,616.5]
+O_lines=[407.2,418.5,441.4,464.9,615.8] # 2026: 616.5 -> 615.8 (O I 615.6-615.8 nm triplet; no line at 616.5)
 O_depth=[0.1,0.2,0.5,0.1,0.8]
 
-Fe_lines=[428.2,438.3,495.7,516.7,526.9,645.6]
+Fe_lines=[428.2,438.3,495.7,532.8,526.9,645.6] # 2026: 516.7 -> 532.8 (516.7 is Mg b)
 Fe_depth=[0.6,0.7,0.25,0.35,0.1,0.2]
 
-#atomic line list Dictionary
-LineListDict={'Hydrogen':[H_lines,H_depth],'Helium':[He_lines,He_depth],'Lithium':[Li_lines,Li_depth],'Sodium':[Na_lines,Na_depth],'Mercury':[Hg_lines,Hg_depth],'Neon':[Ne_lines,Ne_depth],'Nitrogen':[N_lines,N_depth],'Carbon':[C_lines,C_depth],'Oxygen':[O_lines,O_depth],'Iron':[Fe_lines,Fe_depth]}
+# Spectral classes and their temperature ranges (in Kelvin), following
+# Table 17.2 of Astronomy 2e (OpenStax). Each star is assigned a spectral class
+# first (each class equally likely), then a temperature inside that class. This
+# gives the class an even mix of O, B, A, F, G, K, and M stars, instead of
+# mostly hot stars (a flat 2,400-30,000 K draw made ~80% of stars hotter than
+# 7,500 K). To leave a class out, delete its line. O stars have no upper limit
+# in the textbook; 40,000 K is used here so the peak stays on Figure 1.
+SpectralClassDict={'O':[30000,40000],
+                   'B':[10000,30000],
+                   'A':[7500,10000],
+                   'F':[6000,7500],
+                   'G':[5200,6000],
+                   'K':[3700,5200],
+                   'M':[2400,3700]}
 
+# Keep temperatures this fraction of the class's range away from its edges, so a
+# small error reading the peak wavelength off Figure 1 doesn't push a student's
+# star into the neighbouring spectral class. Set to 0 to use the full range.
+class_edge_margin=0.1
+
+def randomTemperature(rng):
+    '''
+    Pick a spectral class at random (all equally likely), then a temperature
+    inside that class's range, rounded to the nearest 100 K.
+    rng is the student's own random number generator (see studentRNG()).
+    Returns (temperature, spectral class).
+    '''
+    spectral_class=rng.choice(list(SpectralClassDict.keys()))
+    T_low,T_high=SpectralClassDict[spectral_class]
+    margin=(T_high-T_low)*class_edge_margin
+    temperature=rng.uniform(T_low+margin,T_high-margin)
+    temperature=int(round(temperature,-2)) # only need it to the closest hundred
+    return temperature,spectral_class
+
+#atomic line list Dictionary
+LineListDict={'Hydrogen':[H_lines,H_depth],'Helium':[He_lines,He_depth],'Lithium':[Li_lines,Li_depth],'Sodium':[Na_lines,Na_depth],'Calcium':[Ca_lines,Ca_depth],'Magnesium':[Mg_lines,Mg_depth],'Nitrogen':[N_lines,N_depth],'Carbon':[C_lines,C_depth],'Oxygen':[O_lines,O_depth],'Iron':[Fe_lines,Fe_depth]}
+
+
+# Width of every absorption line, as the standard deviation (sigma) of a
+# Gaussian, in nm. 0.4 nm gives lines ~0.9 nm wide (full width at half depth):
+# narrow enough to separate lines ~1.5 nm apart, wide enough to see in Figure 2.
+line_sigma=0.4
 
 #defining the Black Body Spectrum of the stars
 def planck(wavelength, T):
     """
-    Function to calculate the blackbody radiation intensity for a given wavelength and temperature.
-
-    There is a way to do this using the astropy library, however, I couldn't
-    easily figure it out, so I just created the Planck function from scratch.
-
-    Here's the link to the astropy blackbody model
-
-    Future goal: get this working instead.
-    https://docs.astropy.org/en/stable/api/astropy.modeling.physical_models.BlackBody.html
+    Blackbody (Planck) intensity for an ARRAY of wavelengths (in metres) at
+    temperature T (in Kelvin). Where the exponent is very large (far UV for
+    cool stars) the intensity is effectively zero, so it is set to zero to avoid
+    overflow errors.
     """
     exponent = h * c / (wavelength * k * T)
-    # this approximation was required because I kept getting errors when the
-    # exponent was large.
-    if exponent > 100:
-        intensity = 0.0  # Approximate very large exponent as zero intensity
-    else:
-        intensity = (2 * h * c**2 / wavelength**5) / (np.exp(exponent) - 1)
+    intensity = np.zeros_like(wavelength)
+    ok = exponent < 100
+    intensity[ok] = (2 * h * c**2 / wavelength[ok]**5) / np.expm1(exponent[ok])
     return intensity
 
-def createSpectrum(student):
+def makeWavelengths():
+    """
+    Wavelength grid in nm, from 1 to 2000 nm. Every 1 nm across most of the
+    range, but every 0.1 nm from 380 to 720 nm, where the absorption lines are,
+    so that each line has a smooth shape. (A fine grid everywhere would make the
+    PDFs much larger for no visible benefit.)
+    """
+    coarse = np.arange(1, 2001, 1.0)
+    coarse = coarse[(coarse < 380) | (coarse > 720)]
+    fine = np.arange(380, 720.05, 0.1)
+    return np.sort(np.concatenate([coarse, fine]))
+
+def applyAbsorption(wavelengths, intensities, elements):
+    """
+    Multiply the spectrum by a Gaussian dip for every line of every element.
+    A line of depth d removes a fraction d of the light at its centre, less
+    towards its edges. Overlapping lines simply multiply together, so blended
+    lines look like a single wider, deeper dip, as in a real spectrum.
+    """
+    absorbed = np.ones_like(intensities)
+    for key in elements:
+        lines, depths = LineListDict[key]
+        for l, d in zip(lines, depths):
+            absorbed *= 1 - d*np.exp(-0.5*((wavelengths - l)/line_sigma)**2)
+    return intensities*absorbed
+
+def addFigure1Grid(ax, wavelengths):
     '''
-    Function to create a PDF containing spectrum and other pertinent
-    information for each student.
-    Calls planck() when needed.
+    Major ticks/gridlines every 200 nm (labelled), plus light minor gridlines
+    every 20 nm, so students can read the peak wavelength more precisely. This
+    matters most for hot stars, whose peaks sit at ~70-300 nm.
     '''
-    # print(student[0],student[1],student[2],student[3])
+    ax.set_xticks(np.arange(min(wavelengths)-1, max(wavelengths), 200))
+    ax.xaxis.set_minor_locator(MultipleLocator(20))
+    ax.grid(True, which='major', linewidth=0.8)
+    ax.grid(True, which='minor', axis='x', linewidth=0.4, alpha=0.5)
 
-    # Step 1 - First randomly generate a Temperature
-    temperature=random.randint(2400,30000) # in Kelvin
-    temperature=round(temperature,-2) # I only need it to be to the closest hundred
 
-    # Step 2 - Define the wavelength range
-    wavelengths = np.linspace(1, 2000, 2000)  # in nanometers
-    # Convert wavelengths to meters for calculation
-    wavelengths_m = wavelengths * 1e-9  # convert nanometers to meters
+#-------------------------------------------------------------------------------
+# SETTINGS used by the figures and the answer key
+#-------------------------------------------------------------------------------
 
-    # Step 3 - Choose 3 random elements
-    # this creates a LIST of 3 elements, randomly taken from the LineListDict
-    random_Lines = random.sample(list(LineListDict.keys()),3)
+# Figure 2 (the zoom-in) covers this range, in nm
+fig2_range=[390,710]
 
-    # Step 4 - call planck(), sending the randomly generated temperature value
-    # and the wavelength range
-    intensities = [planck(wavelength, temperature) for wavelength in wavelengths_m]
+# Boundaries between UV / Visible / Infrared used in the answer key (nm)
+visible_range=[400,700]
 
-    # Step 5 - Find the wavelength of peak intensity
-    # This is done, so that it can be printed on the ANSWERS version, as students
-    # are asked to measure this themselves off their graph by hand
-    wavelength_peak = wavelengths[np.argmax(intensities)]
-    # print(wavelength_peak) # for validation
+# The Sun's surface temperature (K), used for Q4 ("how many times hotter or
+# cooler than the Sun?"). Check this matches the value in your textbook.
+sun_temperature=5800
 
-    # Step 6 - Calculate the temperature using Wien's Law
-    calculated_temperature = wien_constant / wavelength_peak
-    # print(calculated_temperature) # for validation
+# Speed used for the Doppler-shift answers (Q8), as a fraction of the speed of
+# light. 0.05 = 15,000 km/s, fast enough that the shift is obvious in Figure 2.
+doppler_v_over_c=0.05
 
-    # Step 7 - apply the absorption patterns
-    # this is done by starting with the random element, then indexing through
-    # the wavelengths array until you find the right spot, then applying the
-    # 'intensity' value.
-    # FUTURE: this should be its own function.
-    for key in random_Lines:
-        lines=LineListDict[key][0]
-        depth=LineListDict[key][1]
-        print(key)
-        print(lines)
-        print(depth)
+# Short labels for the absorption lines in the answer key
+ElementSymbol={'Hydrogen':'H','Helium':'He','Lithium':'Li','Sodium':'Na',
+               'Calcium':'Ca','Magnesium':'Mg','Nitrogen':'N','Carbon':'C',
+               'Oxygen':'O','Iron':'Fe'}
 
-        for index,l in enumerate(lines):
-            for i in range(len(wavelengths)):
-                if wavelengths[i]>=l-0.5 and wavelengths[i]<=l+0.5:
-                    intensities[i]=intensities[i]*(1-depth[index])
+#-------------------------------------------------------------------------------
+# BUILDING EACH STUDENT'S STAR
+#-------------------------------------------------------------------------------
 
-    # Step 8 - Output
-    # This portion creates two PDF objects
-    # figStudent - for handing out to the student
-    # figProfessor - for handing out to Prof/TAs, contains some of the answers.
-
-    # Create the figure and axis objects
-    figStudent, (ax1s, ax2s) = plt.subplots(2, 1, figsize=(8, 10), gridspec_kw={'height_ratios': [1, 1]})
-    figProfessor, (ax1p, ax2p) = plt.subplots(2, 1, figsize=(8, 10), gridspec_kw={'height_ratios': [1, 1]})
-
-    # Plot for STUDENT
-    # Plot the blackbody spectrum in the top subplot
-    ax1s.plot(wavelengths, intensities, color='black')
-    ax1s.set_title('Student: {}. Figure 1 - Spectrum'.format(student[0]))
-    ax1s.set_xlabel('Wavelength (nm)')
-    ax1s.set_ylabel('Intensity') # (W/sr/m^3)
-    ax1s.grid(True)
-    ax1s.set_xticks(np.arange(min(wavelengths)-1, max(wavelengths), 200))
-
-    ax2s.plot(wavelengths,intensities,color='black')
-    ax2s.set_title('Student: {}. Figure 2 - Absorption pattern'.format(student[0]))
-    ax2s.set_xlabel('Wavelength (nm)')
-    ax2s.set_ylabel('Intensity')
-    ax2s.set_xlim([390,710])
-    ax2s.grid(True)
-    visy=[]
-    for index,lam in enumerate(wavelengths):
-        if lam>390 and lam<710:
-            visy.append(intensities[index])
-    ax2s.set_ylim(np.min(visy),np.max(visy)+(np.max(visy)*0.1))
-
-    # Plot for PROFESSOR
-    # Plot the blackbody spectrum in the top subplot
-    ax1p.plot(wavelengths, intensities, color='black')
-    ax1p.set_title('Student: {}. Figure 1 - Spectrum at {}K'.format(student[0],temperature))
-    ax1p.set_xlabel('Wavelength (nm)')
-    ax1p.set_ylabel('Intensity') # (W/sr/m^3)
-    ax1p.grid(True)
-    ax1p.set_xticks(np.arange(min(wavelengths)-1, max(wavelengths), 200))
-    # Annotate the plot with the wavelength of peak intensity
-    ax1p.annotate('Peak at {:.2f} nm'.format(wavelength_peak),
-            xy=(wavelength_peak, np.max(intensities)),
-            xytext=(wavelength_peak + 100, np.max(intensities) - 0.5),
-            arrowprops=dict(facecolor='black', arrowstyle='->'))
-
-    ax2p.plot(wavelengths,intensities,color='black')
-    ax2p.set_title('Student: {}. Figure 2- Absorption pattern for {}, {}, {}'.format(student[0],random_Lines[0],random_Lines[1],random_Lines[2]))
-    ax2p.set_xlabel('Wavelength (nm)')
-    ax2p.set_ylabel('Intensity')
-    ax2p.set_xlim([390,710])
-    ax2p.grid(True)
-    ax2p.set_ylim(np.min(visy),np.max(visy)+(np.max(visy)*0.1))
-
-    # return the two PDF objects, for writing to file
-    return figStudent,figProfessor
-
-def startScript(**kwargs):
+def studentRNG(student_number, seed):
     '''
-    Function to get the program moving. Not sure if this is the best way
+    A random number generator that depends only on the student number and the
+    seed. The same student + same seed always gives the same star, so re-running
+    the script (e.g. for a late enrolment) never changes anyone's spectrum.
+    Use a new seed each year (e.g. -seed FW26) to give everyone new stars.
     '''
-    # Read in the file of students, one spectrum will be created for each entry
-    file=open(kwargs['file'],"r")
-    studentList=list(csv.reader(file,delimiter=","))
-    file.close()
+    digest=hashlib.sha256('{}-{}'.format(seed,student_number).encode()).hexdigest()
+    return random.Random(int(digest[:16],16))
 
-    # Grabbing the desired output filename
-    # outFileName=kwargs['out']
+def studentLabel(student_number):
+    '''
+    What appears on the figures: the last 5 digits of the student number, so the
+    class-wide PDF doesn't show anyone's full student number.
+    '''
+    return '...'+student_number[-5:]
 
-    # Set output PDFs, based on the desired root/suffic name
-    # pdfStudent=PdfPages('STUDENT_'+outfileName)
-    # pdfProfessor=PdfPages('ANSWERS_'+outfileName)
+def makeStar(student_number, seed):
+    '''
+    Everything about one student's star: temperature, spectral class, elements,
+    and the spectrum itself. The spectrum is scaled so its peak is 1 ("relative
+    intensity"): only its shape and the peak's position matter for the project.
+    '''
+    rng=studentRNG(student_number, seed)
+    temperature,spectral_class=randomTemperature(rng)
+    elements=rng.sample(list(LineListDict.keys()),3)
 
-    # Instantiate two new PDF documents
-    pdfStudent=PdfPages('STUDENT_nats1740a-y23-project2-student-spectra.pdf')
-    pdfProfessor=PdfPages('ANSWERS_nats1740a-y23-project2-professor-answers.pdf')
+    wavelengths=makeWavelengths()                    # nm
+    continuum=planck(wavelengths*1e-9, temperature)  # planck() wants metres
+    peak=wavelengths[np.argmax(continuum)]           # found BEFORE adding lines
+    continuum=continuum/np.max(continuum)            # peak = 1
 
+    # fraction of light let through at each wavelength (1 = no absorption)
+    transmission=applyAbsorption(wavelengths, np.ones_like(wavelengths), elements)
 
-    for i in range(len(studentList)):
-        figStudent,figProfessor=createSpectrum(studentList[i])
-        pdfStudent.savefig(figStudent)
-        pdfProfessor.savefig(figProfessor)
+    return {'temperature':temperature, 'spectral_class':spectral_class,
+            'elements':elements, 'wavelengths':wavelengths,
+            'continuum':continuum, 'transmission':transmission,
+            'spectrum':continuum*transmission, 'peak':peak,
+            'wien_temperature':wien_constant/peak}
 
+def peakRegion(peak):
+    if peak<visible_range[0]: return 'UV'
+    if peak<=visible_range[1]: return 'Visible'
+    return 'Infrared'
+
+#-------------------------------------------------------------------------------
+# RAINBOW STRIPS (what the spectrum looks like to the eye)
+#-------------------------------------------------------------------------------
+
+def wavelengthToRGB(wl):
+    '''
+    Approximate colour of each wavelength (nm), as (red, green, blue) from 0-1.
+    Based on Dan Bruton's widely used approximation. Colours fade towards the
+    ends of the visible range, where our eyes are less sensitive.
+    '''
+    wl=np.asarray(wl, dtype=float)
+    r=np.zeros_like(wl); g=np.zeros_like(wl); b=np.zeros_like(wl)
+    m=(wl>=380)&(wl<440); r[m]=-(wl[m]-440)/60; b[m]=1
+    m=(wl>=440)&(wl<490); g[m]=(wl[m]-440)/50; b[m]=1
+    m=(wl>=490)&(wl<510); g[m]=1; b[m]=-(wl[m]-510)/20
+    m=(wl>=510)&(wl<580); r[m]=(wl[m]-510)/70; g[m]=1
+    m=(wl>=580)&(wl<645); r[m]=1; g[m]=-(wl[m]-645)/65
+    m=(wl>=645)&(wl<=780); r[m]=1
+    fade=np.ones_like(wl)
+    m=(wl>=380)&(wl<420); fade[m]=0.3+0.7*(wl[m]-380)/40
+    m=(wl>700)&(wl<=780); fade[m]=0.3+0.7*(780-wl[m])/80
+    fade[(wl<380)|(wl>780)]=0
+    return np.stack([r*fade,g*fade,b*fade],axis=1)
+
+def drawRainbow(ax, wavelengths, brightness, title=None):
+    '''
+    Draw a colour strip over Figure 2's range. brightness (0-1) at each
+    wavelength: the transmission for an absorption spectrum (dark lines on a
+    rainbow), or the emission lines for an emission spectrum (bright lines on
+    black).
+    '''
+    m=(wavelengths>=fig2_range[0])&(wavelengths<=fig2_range[1])
+    rgb=wavelengthToRGB(wavelengths[m])*np.clip(brightness[m],0,1)[:,None]
+    ax.imshow(rgb[np.newaxis,:,:], aspect='auto',
+              extent=[fig2_range[0],fig2_range[1],0,1])
+    ax.set_xlim(fig2_range)
+    ax.set_yticks([])
+    ax.set_xlabel('Wavelength (nm)')
+    if title: ax.set_title(title, fontsize=10)
+
+#-------------------------------------------------------------------------------
+# FIGURES
+#-------------------------------------------------------------------------------
+
+def plotFigure1(ax, star, label, answers=False):
+    w=star['wavelengths']
+    ax.plot(w, star['spectrum'], color='black')
+    title='Student: {}. Figure 1 - Spectrum'.format(label)
+    if answers:
+        title+=' at {} K (type {})'.format(star['temperature'],star['spectral_class'])
+    ax.set_title(title)
+    ax.set_xlabel('Wavelength (nm)')
+    ax.set_ylabel('Relative intensity')
+    ax.set_ylim(0,1.1)
+    addFigure1Grid(ax, w)
+    if answers:
+        # Q1: the UV / Visible / IR boundaries
+        for x in visible_range:
+            ax.axvline(x, color='tab:blue', linestyle='--', linewidth=1)
+        for x,text in [(visible_range[0]/2,'UV'),(sum(visible_range)/2,'Vis'),
+                       (visible_range[1]+150,'IR')]:
+            ax.text(x, 1.03, text, color='tab:blue', ha='center', fontsize=9)
+        # Q2: the peak
+        ax.annotate('Peak at {:.1f} nm'.format(star['peak']),
+                    xy=(star['peak'],1), xytext=(25,-30),
+                    textcoords='offset points',
+                    arrowprops=dict(arrowstyle='->', color='tab:red'),
+                    color='tab:red')
+
+def fig2Ylim(star):
+    '''Figure 2's y-axis: from 0 to a little above the brightest visible light.'''
+    w=star['wavelengths']
+    m=(w>=fig2_range[0])&(w<=fig2_range[1])
+    return 0, 1.1*np.max(star['continuum'][m])
+
+def labelLines(ax, star, shift=1.0, y_values=None):
+    '''Write each line's element symbol just above it (answer key only).'''
+    w=star['wavelengths']
+    for el in star['elements']:
+        for l in LineListDict[el][0]:
+            x=l*shift
+            if not (fig2_range[0]<=x<=fig2_range[1]): continue
+            y=np.interp(l, w, y_values if y_values is not None else star['continuum'])
+            ax.text(x, y+0.02*ax.get_ylim()[1], ElementSymbol[el], rotation=90,
+                    ha='center', va='bottom', fontsize=6, color='tab:red')
+
+def plotFigure2(ax, star, label, answers=False):
+    w=star['wavelengths']
+    ax.plot(w, star['spectrum'], color='black')
+    title='Student: {}. Figure 2 - Absorption pattern'.format(label)
+    if answers: title+=' for {}'.format(', '.join(star['elements']))
+    ax.set_title(title)
+    ax.set_xlabel('Wavelength (nm)')
+    ax.set_ylabel('Relative intensity')
+    ax.set_xlim(fig2_range)
+    ax.set_ylim(*fig2Ylim(star))
+    ax.grid(True)
+    if answers: labelLines(ax, star)
+
+def studentPage(star, label, rainbow):
+    fig=plt.figure(figsize=(8,10), layout='constrained')
+    if rainbow:
+        gs=fig.add_gridspec(3,1,height_ratios=[1,1,0.12])
+    else:
+        gs=fig.add_gridspec(2,1)
+    plotFigure1(fig.add_subplot(gs[0]), star, label)
+    ax2=fig.add_subplot(gs[1])
+    plotFigure2(ax2, star, label)
+    if rainbow:
+        ax2.set_xlabel('')
+        drawRainbow(fig.add_subplot(gs[2]), star['wavelengths'], star['transmission'])
+    return fig
+
+def answerPage1(star, label):
+    fig=plt.figure(figsize=(8,10), layout='constrained')
+    gs=fig.add_gridspec(3,1,height_ratios=[1,1,0.12])
+    plotFigure1(fig.add_subplot(gs[0]), star, label, answers=True)
+    ax2=fig.add_subplot(gs[1])
+    plotFigure2(ax2, star, label, answers=True)
+    ax2.set_xlabel('')
+    drawRainbow(fig.add_subplot(gs[2]), star['wavelengths'], star['transmission'])
+    return fig
+
+def answerPage2(star, label):
+    '''
+    Q8: Figure 2 for a star moving quickly towards us (blueshift) and away from
+    us (redshift). Q9: the emission spectrum of a gas cloud made of the same
+    three elements, as a graph and as a colour strip.
+    '''
+    w=star['wavelengths']
+    fig=plt.figure(figsize=(8,10), layout='constrained')
+    gs=fig.add_gridspec(5,1,height_ratios=[1,1,1,0.15,0.15])
+    v=doppler_v_over_c
+    kms='{:,.0f}'.format(v*c/1000)
+    for row,(shift,word) in enumerate([(1-v,'TOWARDS us (blueshift)'),
+                                       (1+v,'AWAY from us (redshift)')]):
+        ax=fig.add_subplot(gs[row])
+        ax.plot(w*shift, star['spectrum'], color='black')
+        for el in star['elements']:            # where the lines were at rest
+            for l in LineListDict[el][0]:
+                ax.axvline(l, color='grey', linestyle=':', linewidth=0.8)
+        ax.set_title('Student: {}. Q8 - Figure 2 for a star moving {} at {} km/s'
+                     .format(label,word,kms), fontsize=10)
+        ax.set_xlim(fig2_range); ax.set_ylim(*fig2Ylim(star))
+        ax.set_ylabel('Relative intensity'); ax.grid(True)
+        labelLines(ax, star, shift=shift)
+        ax.text(0.01,0.03,'dotted lines = line positions at rest',
+                transform=ax.transAxes, fontsize=7, color='grey')
+
+    # Q9: emission spectrum - bright lines at the same wavelengths
+    emission=1-star['transmission']             # each line becomes a bright spike
+    ax=fig.add_subplot(gs[2])
+    ax.plot(w, emission, color='black')
+    ax.set_title('Student: {}. Q9 - Emission spectrum of a gas cloud of {}'
+                 .format(label, ', '.join(star['elements'])), fontsize=10)
+    ax.set_xlim(fig2_range); ax.set_ylim(0,1.1)
+    ax.set_ylabel('Relative intensity'); ax.set_xlabel('Wavelength (nm)')
+    ax.grid(True)
+    labelLines(ax, star, y_values=emission)
+    drawRainbow(fig.add_subplot(gs[3]), w, star['transmission'],
+                title='Absorption spectrum (star) as seen by eye')
+    drawRainbow(fig.add_subplot(gs[4]), w, emission,
+                title='Emission spectrum (gas cloud) as seen by eye')
+    return fig
+
+#-------------------------------------------------------------------------------
+# ANSWER KEY SPREADSHEET
+#-------------------------------------------------------------------------------
+
+AnswerColumns=['student_number','label','last_name','first_name',
+               'Q1_peak_region','Q2_peak_wavelength_nm','Q3_wien_temperature_K',
+               'Q4_times_vs_sun','Q4_hotter_or_cooler','Q5_spectral_type',
+               'Q7_element_1','Q7_element_2','Q7_element_3',
+               'true_temperature_K']
+
+def answerRow(student, star):
+    wienT=star['wien_temperature']
+    hotter=wienT>=sun_temperature
+    ratio=wienT/sun_temperature if hotter else sun_temperature/wienT
+    return {'student_number':student[0],
+            'label':studentLabel(student[0]),
+            'last_name':student[1] if len(student)>1 else '',
+            'first_name':student[2] if len(student)>2 else '',
+            'Q1_peak_region':peakRegion(star['peak']),
+            'Q2_peak_wavelength_nm':'{:.1f}'.format(star['peak']),
+            'Q3_wien_temperature_K':'{:.0f}'.format(wienT),
+            'Q4_times_vs_sun':'{:.2f}'.format(ratio),
+            'Q4_hotter_or_cooler':'hotter' if hotter else 'cooler',
+            'Q5_spectral_type':star['spectral_class'],
+            'Q7_element_1':star['elements'][0],
+            'Q7_element_2':star['elements'][1],
+            'Q7_element_3':star['elements'][2],
+            'true_temperature_K':star['temperature']}
+
+#-------------------------------------------------------------------------------
+# RUNNING THE WHOLE CLASS
+#-------------------------------------------------------------------------------
+
+def readStudents(filename):
+    '''
+    Read the class list. Rows whose first column isn't a student number (e.g. a
+    header row from an eClass export, or blank rows) are skipped.
+    '''
+    students=[]
+    with open(filename, newline='', encoding='utf-8-sig') as f:
+        for row in csv.reader(f):
+            if not row or not row[0].strip().isdigit():
+                if row and any(cell.strip() for cell in row):
+                    print('skipping row (no student number): {}'.format(row[:3]))
+                continue
+            students.append([cell.strip() for cell in row])
+    # warn if two students would share the same 5-digit label
+    labels={}
+    for s in students: labels.setdefault(studentLabel(s[0]),[]).append(s[0])
+    for lab,nums in labels.items():
+        if len(nums)>1:
+            print('WARNING: students {} share the label {}'.format(', '.join(nums),lab))
+    return students
+
+def startScript(file, out, seed, no_rainbow_student):
+    students=readStudents(file)
+    root=os.path.splitext(out)[0]
+    studentPDF='STUDENT_{}.pdf'.format(root)
+    answerPDF='ANSWERS_{}.pdf'.format(root)
+    answerCSV='ANSWERS_{}.csv'.format(root)
+
+    pdfStudent=PdfPages(studentPDF)
+    pdfAnswers=PdfPages(answerPDF)
+    rows=[]
+    for student in students:
+        star=makeStar(student[0], seed)
+        label=studentLabel(student[0])
+        for pdf,fig in [(pdfStudent,studentPage(star,label,not no_rainbow_student)),
+                        (pdfAnswers,answerPage1(star,label)),
+                        (pdfAnswers,answerPage2(star,label))]:
+            pdf.savefig(fig)
+            plt.close(fig)   # free memory; large classes otherwise pile up
+        rows.append(answerRow(student, star))
     pdfStudent.close()
-    pdfProfessor.close()
+    pdfAnswers.close()
+
+    with open(answerCSV,'w',newline='') as f:
+        writer=csv.DictWriter(f, fieldnames=AnswerColumns)
+        writer.writeheader()
+        writer.writerows(rows)
+
+    print('{} students. Wrote {}, {}, {} (seed: {})'
+          .format(len(students), studentPDF, answerPDF, answerCSV, seed))
 
 
 #-------------------------------------------------------------------------------
 #reading in from the command line
 
-parser=argparse.ArgumentParser()
-parser.add_argument('file', type=str, help='/path/to/list/of/students. Must be a CSV file, with column 1: student number, column 2: last name, column 3: first name. More columns are fine, they wont be used.')
-parser.add_argument('-out', type=str, default='randomStarSpectra.pdf', help="Two output files are always created, with prefixes 'ANSWERS_' and 'STUDENT_'. This argument allows you to specify the root/suffix of those two PDFs. The default is: randomStarSpectra.pdf")
-kwargs=vars(parser.parse_args())
+# (only runs when this file is run directly, so other scripts, like
+# makeAbsorptionHandouts.py, can import the line lists without running it)
+if __name__ == '__main__':
+    parser=argparse.ArgumentParser()
+    parser.add_argument('file', type=str, help='/path/to/list/of/students. Must be a CSV file, with column 1: student number, column 2: last name, column 3: first name. More columns are fine, they wont be used. A header row is fine; it is skipped.')
+    parser.add_argument('-out', type=str, default='randomStarSpectra.pdf', help="Root of the output filenames. Creates STUDENT_[root].pdf, ANSWERS_[root].pdf and ANSWERS_[root].csv. The default is: randomStarSpectra.pdf")
+    parser.add_argument('-seed', type=str, default='starSpectrumCreator', help="Any word or number. The same seed always gives each student the same star, so you can safely re-run the script. Use a new seed each year (e.g. -seed FW26) for new stars.")
+    parser.add_argument('-no_rainbow_student', action='store_true', help="Leave the colour (rainbow) strip off the STUDENT pages, e.g. if students are asked to draw it themselves. It is always on the ANSWERS pages.")
+    args=parser.parse_args()
 
-startScript(**kwargs)
+    startScript(args.file, args.out, args.seed, args.no_rainbow_student)
