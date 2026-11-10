@@ -151,6 +151,8 @@ HISTORY
                    Q8 (blue/redshifted Figure 2) and Q9 (emission spectrum)
                  - ANSWERS_[root].csv answer key spreadsheet (Q1-Q5, Q7)
                  - -out now works; header/blank rows in the class list skipped
+                 - one PDF per student (STUDENT_[root]/spectrum_12345.pdf, plus
+                   a .zip for eClass); everything sorted by those 5 digits
 --------------------------------------------------------------------------------
 '''
 import numpy as np
@@ -163,6 +165,7 @@ import random
 import hashlib
 import csv
 import os
+import shutil
 import sys
 
 # Constants
@@ -338,12 +341,39 @@ def studentRNG(student_number, seed):
     digest=hashlib.sha256('{}-{}'.format(seed,student_number).encode()).hexdigest()
     return random.Random(int(digest[:16],16))
 
-def studentLabel(student_number):
+def studentDigits(students, n=5):
     '''
-    What appears on the figures: the last 5 digits of the student number, so the
-    class-wide PDF doesn't show anyone's full student number.
+    The digits that identify each student on their figures and file: the last 5
+    digits of their student number, so nobody's full number is published. If two
+    students' numbers end in the same 5 digits, those two get the last 6 (or 7,
+    ...) digits instead, so every label and filename is unique.
+    Returns {student number: digits}.
     '''
-    return '...'+student_number[-5:]
+    digits={}
+    for s in students:
+        k=n
+        while True:
+            d=s[0][-k:]
+            clash=[t[0] for t in students if t[0]!=s[0] and t[0][-k:]==d]
+            if not clash or k>=len(s[0]): break
+            k+=1
+        if k>n: print('NOTE: {} shares its last {} digits with another student; using {}'.format(s[0],n,d))
+        digits[s[0]]=d
+    return digits
+
+def studentFilename(digits):
+    '''
+    spectrum_76543.pdf normally. For two students whose numbers end in the same
+    5 digits, the extra digit(s) go AFTER the 5, e.g. spectrum_76543_8.pdf and
+    spectrum_76543_1.pdf, so both still sort right where the student looks.
+    '''
+    if len(digits)>5:
+        return 'spectrum_{}_{}.pdf'.format(digits[-5:], digits[:-5])
+    return 'spectrum_{}.pdf'.format(digits)
+
+def studentLabel(digits):
+    '''What appears at the top of each figure, e.g. "...76543".'''
+    return '...'+digits
 
 def makeStar(student_number, seed):
     '''
@@ -554,7 +584,7 @@ def answerRow(student, star):
     hotter=wienT>=sun_temperature
     ratio=wienT/sun_temperature if hotter else sun_temperature/wienT
     return {'student_number':student[0],
-            'label':studentLabel(student[0]),
+            'label':studentLabel(star['digits']),
             'last_name':student[1] if len(student)>1 else '',
             'first_name':student[2] if len(student)>2 else '',
             'Q1_peak_region':peakRegion(star['peak']),
@@ -585,32 +615,37 @@ def readStudents(filename):
                     print('skipping row (no student number): {}'.format(row[:3]))
                 continue
             students.append([cell.strip() for cell in row])
-    # warn if two students would share the same 5-digit label
-    labels={}
-    for s in students: labels.setdefault(studentLabel(s[0]),[]).append(s[0])
-    for lab,nums in labels.items():
-        if len(nums)>1:
-            print('WARNING: students {} share the label {}'.format(', '.join(nums),lab))
     return students
 
 def startScript(file, out, seed, no_rainbow_student):
     students=readStudents(file)
+    digits=studentDigits(students)
+    # everything comes out in order of those digits, so pages and files are
+    # easy to find
+    students.sort(key=lambda st: studentFilename(digits[st[0]]))
+
     root=os.path.splitext(out)[0]
     studentPDF='STUDENT_{}.pdf'.format(root)
     answerPDF='ANSWERS_{}.pdf'.format(root)
     answerCSV='ANSWERS_{}.csv'.format(root)
+    folder='STUDENT_{}'.format(root)      # one PDF per student goes in here
+    os.makedirs(folder, exist_ok=True)
 
     pdfStudent=PdfPages(studentPDF)
     pdfAnswers=PdfPages(answerPDF)
     rows=[]
     for student in students:
         star=makeStar(student[0], seed)
-        label=studentLabel(student[0])
-        for pdf,fig in [(pdfStudent,studentPage(star,label,not no_rainbow_student)),
-                        (pdfAnswers,answerPage1(star,label)),
-                        (pdfAnswers,answerPage2(star,label))]:
-            pdf.savefig(fig)
-            plt.close(fig)   # free memory; large classes otherwise pile up
+        star['digits']=digits[student[0]]
+        label=studentLabel(star['digits'])
+
+        fig=studentPage(star,label,not no_rainbow_student)
+        pdfStudent.savefig(fig)                       # class-wide PDF
+        fig.savefig(os.path.join(folder,studentFilename(star['digits'])))
+        plt.close(fig)   # free memory; large classes otherwise pile up
+        for fig in [answerPage1(star,label), answerPage2(star,label)]:
+            pdfAnswers.savefig(fig)
+            plt.close(fig)
         rows.append(answerRow(student, star))
     pdfStudent.close()
     pdfAnswers.close()
@@ -620,8 +655,14 @@ def startScript(file, out, seed, no_rainbow_student):
         writer.writeheader()
         writer.writerows(rows)
 
-    print('{} students. Wrote {}, {}, {} (seed: {})'
-          .format(len(students), studentPDF, answerPDF, answerCSV, seed))
+    # zip the folder of individual PDFs, ready to upload to an eClass Folder
+    shutil.make_archive(folder, 'zip', folder)
+
+    print('{} students (seed: {}). Wrote:'.format(len(students), seed))
+    print('  {}/ and {}.zip  - one PDF per student, e.g. spectrum_{}.pdf'
+          .format(folder, folder, '12345'))
+    print('  {}  - all students in one PDF'.format(studentPDF))
+    print('  {}, {}  - answer key (keep private)'.format(answerPDF, answerCSV))
 
 
 #-------------------------------------------------------------------------------
@@ -632,7 +673,7 @@ def startScript(file, out, seed, no_rainbow_student):
 if __name__ == '__main__':
     parser=argparse.ArgumentParser()
     parser.add_argument('file', type=str, help='/path/to/list/of/students. Must be a CSV file, with column 1: student number, column 2: last name, column 3: first name. More columns are fine, they wont be used. A header row is fine; it is skipped.')
-    parser.add_argument('-out', type=str, default='randomStarSpectra.pdf', help="Root of the output filenames. Creates STUDENT_[root].pdf, ANSWERS_[root].pdf and ANSWERS_[root].csv. The default is: randomStarSpectra.pdf")
+    parser.add_argument('-out', type=str, default='randomStarSpectra.pdf', help="Root of the output filenames. Creates STUDENT_[root].pdf, a STUDENT_[root] folder (and .zip) with one PDF per student named spectrum_[last 5 digits].pdf, ANSWERS_[root].pdf and ANSWERS_[root].csv. The default is: randomStarSpectra.pdf")
     parser.add_argument('-seed', type=str, default='starSpectrumCreator', help="Any word or number. The same seed always gives each student the same star, so you can safely re-run the script. Use a new seed each year (e.g. -seed FW26) for new stars.")
     parser.add_argument('-no_rainbow_student', action='store_true', help="Leave the colour (rainbow) strip off the STUDENT pages, e.g. if students are asked to draw it themselves. It is always on the ANSWERS pages.")
     args=parser.parse_args()
